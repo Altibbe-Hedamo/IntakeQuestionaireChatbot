@@ -1,0 +1,14 @@
+Flask
+flask-cors
+requests
+psycopg2-binary
+python-docx
+speechrecognition
+pydub
+pillow
+pytesseract
+PyMuPDF
+gunicorn
+python-dotenv
+google.generativeai
+Flask-Limiter
