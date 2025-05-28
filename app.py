@@ -101,6 +101,71 @@ def query_data_for_report(conn, table, subcategory):
     finally:
         cursor.close()
 
+def create_product_table():
+    conn = get_db_connection()
+    if conn is None:
+        return "Database connection error."
+
+    try:
+        cursor = conn.cursor()
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS product_info (
+            id SERIAL PRIMARY KEY,
+            product_name TEXT UNIQUE NOT NULL,
+            content TEXT NOT NULL
+        );
+        """
+        cursor.execute(create_table_query)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return "Table 'product_info' created successfully (if not already existing)."
+    except Exception as e:
+        return f"Error creating table: {e}"
+
+create_product_table()
+
+def insert_product(product_name, content):
+    conn = get_db_connection()
+    if conn is None:
+        return "Database connection error."
+
+    try:
+        cursor = conn.cursor()
+        query = """
+        INSERT INTO product_info (product_name, content)
+        VALUES (%s, %s)
+        ON CONFLICT (product_name) DO UPDATE
+        SET content = product_info.content || '\n' || EXCLUDED.content
+        """
+        cursor.execute(query, (product_name, content))
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        return "Product content updated successfully."
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_product_content(product_name):
+    conn = get_db_connection()
+    if conn is None:
+        return "Database connection error."
+
+    try:
+        cursor = conn.cursor()
+        query = "SELECT content FROM product_info WHERE product_name = %s"
+        cursor.execute(query, (product_name,))
+        result = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        return result[0] if result else "Product not found."
+    except Exception as e:
+        return f"Error: {e}"
+
 def get_few_shot_prompt(conn, table, subcategory):
     questions_list = query_data(conn, table, subcategory)
     questions_text = questions_list[0] if questions_list else ""
@@ -341,11 +406,19 @@ def chat():
                     return jsonify({"error": f"Unsupported MIME type: {mime}. Supported types: PDF, JPEG, PNG, DOCX, TXT, AUDIO."}), 400
 
         else:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not data:
+               return jsonify({"error": "Missing or invalid JSON data"}), 400
+
             session_id = data.get("session_id")
             user_response = data.get("user_response")
             category=data.get("category","")
             sub_categories=data.get("sub_categories",[])
+            product_name=data.get("product_name","")
+
+            print("category::->",category)
+            print("Subcategories::->",sub_categories)
+            print("product_name::->",product_name)
 
         history, answers, completed, attempts = get_session(session_id)
         if attempts is None:
@@ -363,7 +436,8 @@ def chat():
           questions = [line.strip() for line in all_questions.split("\n") if line.strip()]
 
           print("Info from Database::->",questions)
-        
+
+          history.append(product_name)
           history.append(category)
           history.append(json.dumps(sub_categories)) 
 
@@ -436,10 +510,13 @@ def chat():
             '''with open('prompt.txt', 'r', encoding='utf-8') as file:
                 content = file.read()'''
             
-            category = history[0]
-            sub_categories = json.loads(history[1]) if isinstance(history[1], str) else history[1]
+            product_name=history[0]
+            category = history[1]
+            sub_categories = json.loads(history[2]) if isinstance(history[2], str) else history[2]
             conn=get_db_connection2()
             
+            content_to_append_for_final_report=""
+        
             all_content=""
             
             for subcategory in sub_categories:
@@ -452,12 +529,20 @@ def chat():
             
             for i, a in enumerate(history): 
                 report_prompt += f"{i+1}:{a}\n"
+                content_to_append_for_final_report+= f"{i+1} : {a}"
+
+            insert_product(product_name, content_to_append_for_final_report)
 
             print("Report prompt after history",report_prompt)
 
             contents.insert(0, {"text": report_prompt})
             response = model.generate_content(contents)
             report = response.text.strip()
+
+            insert_product(product_name, report)
+
+            content_from_db=get_product_content(product_name)
+            print("Content Saved to DB for final report::::->>>>",content_from_db)
 
             save_session(session_id, history, answers, completed, attempts)
             return jsonify({
